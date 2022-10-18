@@ -162,16 +162,20 @@ Second, memory values are currently represented as Python-native types (e.g.,
 Third, we have a mini DSL for expressing lowering rules. See calls to
 `self.lexing.fancy_rewrite` in `interpreter.py`. For example, this call:
 ```
-labels, new = self.lexing.fancy_rewrite(tree, self.trace,
-    "switch (...) ...", "auto [val] = ({0}); goto [lend]; {{ {1} }} [lend]: 0;")
+self.lexing.fancy_rewrite(tree, self.trace,
+    "while (...) ...",
+    "[lchk]: if ({0}) {{ {1} goto [lchk]; }} [lend]: 0;")
 ```
 essentially anti-unifies the input parse tree against the pattern
-`switch (...) ...`, then rewrites it to the form
+`while (...) ...`, then rewrites it to the form
 ```
-auto [val] = ({0}); goto [lend]; {{ {1} }} [lend]: 0;
+[lchk]: if ({0}) {
+    {1} goto [lchk];
+}
+[lend]: 0;
 ```
 where `{0}` and `{1}` are replaced with the contents of the first and second
-`...` in the pattern, respectively, and `[val]` and `[lend]` are replaced with
+`...` in the pattern, respectively, and `[lchk]` and `[lend]` are replaced with
 fresh labels. This rewriting is done directly on the lexed representation of
 the source. The rewriter keeps track of the original text that we have
 overwritten to provide more helpful user messages when needed. The antiunifier
@@ -193,10 +197,10 @@ correctly yet:
 - Support for symbolic values is rudimentary; it cannot tell that, e.g.,
   `(x+y)==(y+x)`.
 
-On the positive side of things, the entire framework is only about 1k lines of
-code, so it shouldn't be _terribly_ difficult to debug things (will be working
-on comments soon ...). If you have a small example that fails I'm happy to take
-a look.
+On the positive side of things, the entire framework is self-contained and only
+about 1k lines of code, so it shouldn't be _terribly_ difficult to debug things
+(will be working on comments soon ...). If you have a small example that fails
+I'm happy to take a look.
 
 ## License
 AGPLv3, see `LICENSE`. The example code demonstrated in `pinctrl-example` is
