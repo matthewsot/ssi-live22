@@ -1,6 +1,6 @@
 # SSI Framework
-Code for the LIVE 2022 paper "System-Specific Interpreters Make Megasystems
-Friendlier."
+Code for the LIVE 2022 paper [_System-Specific Interpreters Make Megasystems
+Friendlier_](https://arxiv.org/abs/2210.09460).
 
 A system-specific interpreter is an interpreter specialized to execute and
 trace individual modules of a larger system independently, without having to
@@ -188,7 +188,7 @@ implementation of an SSI framework. Things that are guaranteed not to work
 correctly yet:
 - "Reinterpret casts," e.g., casting an `int *` to a `char *` to inspect
   individual bytes of an int. Or, more broadly, anything that relies on values
-  having actualy bit widths.
+  having actual bit widths.
 - Branching on opaque/symbolic values currently always takes the positive
   branch.
 - Only a small number of numerical operations are supported, but you should be
