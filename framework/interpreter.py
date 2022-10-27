@@ -387,7 +387,7 @@ class Interpreter:
         raise NotImplementedError
 
     def returnify_fn(self, start_lexeme):
-        subtree, _ = PEG().parse("(balanced { })", start_lexeme.suffix(incl=True))
+        subtree, _ = PEG().parse("(balanced { })", start_lexeme.suffix(including_self=True))
         assert subtree
         if subtree[-3].string != "return":
             self.lexing.prepend(subtree[-1], "return ;")
