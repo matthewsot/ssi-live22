@@ -8,7 +8,6 @@ directly on the Lexing object, which provides methods like fancy_rewrite(...)
 to assist with this.
 """
 import re
-from framework.peg import relex
 
 class Lexeme:
     """Represents a single lexeme in the file"""
@@ -179,7 +178,7 @@ class Lexing:
         ->
         goto_ite {0} [l_if] [l_else]; [l_if]: {1} [l_else]: 0;
         """
-        from framework.peg import filterlex
+        from framework.peg import filterlex, relex
         tree = filterlex(tree)
         old_range = relex(tree)
         # Find pieces from the old pattern. The basic idea is to walk the tree,
