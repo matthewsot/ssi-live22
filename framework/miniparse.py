@@ -1,6 +1,23 @@
-from framework.peg import *
+"""Grammars and other parsing tools for C code
+
+The expression grammar was originally based off of
+https://github.com/pointlander/peg/blob/master/grammars/c/c.peg
+"""
+from framework.peg import PEG, relex
 
 def parse_some_cf(lexemes):
+    """Parser C control flow with as many holes as possible.
+
+    Unfortunately, even an approximate C control flow grammar is pretty
+    difficult to fit in to the "only parse what you need" mantra, because
+    bodies of, e.g., an if statement can be just "another statement". So if the
+    body of the if contains some construct we don't understand yet, things may
+    break. Currently we just do a standard recursive parsing with holes, but
+    that can probably be improved (e.g., skip to a ;).
+
+    Notably, though, this is still extremely simple to extend --- just add a
+    new syntactic construct to the list in peg.rule("Statement").
+    """
     peg = PEG()
 
     peg.rule("Block", "(balanced { })")
@@ -33,11 +50,26 @@ def parse_some_cf(lexemes):
 
     return peg.parse("(: Statement)", lexemes)
 
-# Adapted from
-# https://github.com/pointlander/peg/blob/master/grammars/c/c.peg
 def parse_some_expr(lexemes):
+    """Parses a C expression (with holes)
+
+    This parser is very compositional; we simply iterate down rules by
+    precedence until we find one that matches the whole string. These rules
+    make liberal use of skipto and balanced so they never need to recurse.
+
+    Currently, this is the performance bottleneck for our interpreter. There
+    are a few ways to speed this up; an obvious one is over-approximating rules
+    and pre-matching the overapproximation. Or trying something like Pratt
+    parsing. But it's not a huge focus for this prototype.
+
+    There's also probably a lot of precedence/associativity issues in
+    here...But, again, the goal is to be "good enough for most code," not
+    "perfect."
+    """
     def try_parse(name, rule):
-        if try_parse.solution is not None: return
+        """If a solution has not been found, try parsing against @rule"""
+        if try_parse.solution is not None:
+            return
         peg = PEG()
         peg.rule("End", "(! (.))")
         peg.rule(name, rule)
@@ -46,15 +78,15 @@ def parse_some_expr(lexemes):
             try_parse.solution = tree
     try_parse.solution = None
 
-    try_parse("Parens", f"(balanced) (: End)")
-    try_parse("Lits", f"(/ (:: ident) (:: strlit) (:: numlit)) (? (: Lits)) (: End)")
+    try_parse("Parens", "(balanced) (: End)")
+    try_parse("Lits", "(/ (:: ident) (:: strlit) (:: numlit)) (? (: Lits)) (: End)")
 
     try_parse("Comma", "(skipto (str ,)) (skipto (: End))")
 
     assignops = " ".join(f"(str {op})" for op in "=,*=,/=,%=,+=,-=,<<=,>>=,&=,^=,|=".split(","))
     try_parse("Assign", f"(skipto (/ {assignops})) (skipto (: End))")
 
-    # HMMM: Does this actually work if we have multiple ? Maybe skiptolast ?
+    # TODO: Does this actually work if we have multiple ? Maybe skiptolast ?
     try_parse("Cond", "(skipto (str ?)) (skipto (str :)) (skipto (: End))")
 
     try_parse("Cast", "(balanced) (& (.)) (/ (& (balanced { })) (! (/ (:: op)))) (skipto (: End))")
@@ -66,16 +98,16 @@ def parse_some_expr(lexemes):
     unary_ops = "+,-,++,--,!,~,*,&".split(",")
     for op in unary_ops:
         try_parse(f"pre_{op}", f"(str {op}) (skipto (: End))")
-    try_parse(f"pre_sizeof", f"(str sizeof) (! (lparen)) (skipto (: End))")
+    try_parse("pre_sizeof", "(str sizeof) (! (lparen)) (skipto (: End))")
 
-    try_parse("Nth", f"(skipto (balanced [ ]) (: End))")
-    try_parse("Member", f"(skipto (str .) (:: ident) (: End))")
-    try_parse("DerefMember", f"(skipto (str ->) (:: ident) (: End))")
-    try_parse("Inc", f"(skipto (str ++) (: End))")
-    try_parse("Dec", f"(skipto (str ++) (: End))")
-    try_parse("FnCall", f"(! (balanced)) (skipto (balanced) (: End))")
+    try_parse("Nth", "(skipto (balanced [ ]) (: End))")
+    try_parse("Member", "(skipto (str .) (:: ident) (: End))")
+    try_parse("DerefMember", "(skipto (str ->) (:: ident) (: End))")
+    try_parse("Inc", "(skipto (str ++) (: End))")
+    try_parse("Dec", "(skipto (str ++) (: End))")
+    try_parse("FnCall", "(! (balanced)) (skipto (balanced) (: End))")
 
-    try_parse("Parens", f"(balanced)")
+    try_parse("Parens", "(balanced)")
 
     try_parse("StructDecl", "(str struct) (? (:: ident)) (balanced { })")
     try_parse("EnumDecl", "(str enum) (? (:: ident)) (balanced { })")
@@ -85,6 +117,7 @@ def parse_some_expr(lexemes):
     return try_parse.solution
 
 def parse_csv(lexemes, comma=","):
+    """"foo, bar" -> ["foo", "bar"]"""
     peg = PEG()
     peg.rule("Val", f"(skipto (str {comma})) (? (: Val))")
     tree, remainder = peg.parse("(: Val)", lexemes)
@@ -101,6 +134,7 @@ def parse_csv(lexemes, comma=","):
     return visit(tree) + [remainder]
 
 def find_nodes(tree, label):
+    """Filters the tree to only nodes labeled @label"""
     if not isinstance(tree, list):
         return []
     if tree[0] == label:
@@ -111,6 +145,7 @@ def find_nodes(tree, label):
     return result
 
 def find_cases(lexemes):
+    """Parses the body of a switch for case statements"""
     peg = PEG()
     peg.rule("Case", "(/ (str case) (str default)) (skipto (str :))")
     peg.rule("CaseOrSkip", "(/ (: Case) (balanced) (balanced { }) (.)) (? (: CaseOrSkip))")
@@ -126,39 +161,19 @@ def find_cases(lexemes):
             cleaned.append(([], tree))
     return cleaned
 
-def find_containing_loop(lexeme):
-    all_lexemes = lexeme.all_lexemes
-    def unmatched_close(lexemes, parens):
-        depth = 0
-        for l in lexemes:
-            if l.string == parens[0]:
-                depth += 1
-            if l.string == parens[1]:
-                depth -= 1
-            if l.string == parens[1] and depth < 0:
-                yield l
-    after = all_lexemes[all_lexemes.index(lexeme):]
-    before = all_lexemes[:all_lexemes.index(lexeme)]
-    surrounding_pairs = zip(unmatched_close(before[::-1], ["}", "{"]),
-                            unmatched_close(after, ["{", "}"]))
-    for start, end in surrounding_pairs:
-        start_i = all_lexemes.index(start)
-        prefix = all_lexemes[:start_i]
-        prefix = prefix[::-1]
-        peg = PEG()
-        # TODO: switch only sometimes
-        peg.rule("ForWhile", "(balanced rev) (/ (str for) (str while) (str switch))")
-        peg.rule("Do", "(str do)")
-        peg.rule("Loop", "(/ (: ForWhile) (: Do))")
-        tree, remainder = peg.parse("(: Loop)", prefix)
-        if tree is not False:
-            return end
-    return None
-
 def find_stmts(lexemes, stmt_types, skip_types):
+    """Recursively parses @lexemes and returns those of type @stmt_types
+
+    Statements with type in @skip_types are not recursed into.
+
+    This is used, e.g., to identify all the "break" statements within a "while"
+    statement so they can be replaced with gotos to the exit of the while. We
+    use @skip_types to tell it not to recurse into sub-while statements,
+    because their "break"s should goto a different location.
+    """
     results = []
     while lexemes:
-        tree, remainder = parse_some_cf(lexemes)
+        tree, _ = parse_some_cf(lexemes)
         if tree:
             assert tree[0] == "Statement"
             if tree[1][0] in stmt_types:
@@ -170,12 +185,14 @@ def find_stmts(lexemes, stmt_types, skip_types):
 
 find_fn_memo = dict()
 def find_fn(name_lex):
+    """Find a function declaration with the given name"""
     if name_lex.string in find_fn_memo:
         return find_fn_memo[name_lex.string]
-    name_lexemes = [l for l in name_lex.lexing.lexemes if l.string == name_lex.string]
+    name_lexemes = [l for l in name_lex.lexing.lexemes
+                    if l.string == name_lex.string]
     for lexeme in name_lexemes:
         suffix = lexeme.lexing.lexemes[lexeme.lexing.lexemes.index(lexeme):]
-        tree, remainder = parse_some_cf(suffix)
+        tree, _ = parse_some_cf(suffix)
         if tree is not False and tree[1][0] == "Function":
             params = [x[-1].string for x in parse_csv(relex(tree[1][2][2])) if x]
             first_lex = relex(tree[1][3][1])[0]
@@ -184,35 +201,8 @@ def find_fn(name_lex):
     find_fn_memo[name_lex.string] = False, False
     return False, False
 
-def find_definitions(name, lexemes):
-    peg = PEG()
-    peg.rule("Ugly", "(? (/ (:: ident) (balanced [ ])) (: Ugly))")
-    peg.rule("Def", f"(str {name}) (: Ugly) (str =) (skipto (str ;))")
-    results = []
-    for i, l in enumerate(lexemes):
-        if l.string != name:
-            continue
-        remaining = lexemes[i:]
-        tree, _ = peg.parse("(: Def)", remaining)
-        results.append(tree)
-    return results
-
-def parse_struct(lexemes):
-    if lexemes[0].string != "{" or lexemes[-1].string != "}":
-        return None
-
-    parsed = []
-    for i, part in enumerate(parse_csv(lexemes[1:-1])):
-        if not part:
-            continue
-        name = None
-        if part[0].string == ".":
-            name = part[1].string
-            part = part[3:]
-        parsed.append((name, part))
-    return parsed
-
 def parse_macro(string):
+    """Parse a C macro given its string representation"""
     from framework.lex import lex_c
     string = string.replace("\\\n", " ")
     if not string.startswith("#define "):
