@@ -137,7 +137,8 @@ interpreter.register_fn("devm_kcalloc", kzalloc)
 # as long as it finds "something," so we can approximate it with a malloc.
 interpreter.register_fn("of_match_node", kzalloc)
 
-# Now we do the actual REPL
+# Now we do the actual REPL. All the commands other than "probe" and
+# "enable-irq" are basically boilerplate that can be copied over to other SSIs.
 def REPL(interpreter):
     global pc
     if interpreter.curr_lexeme:
@@ -153,6 +154,12 @@ def REPL(interpreter):
             command = command[len("xc "):]
             result = interpreter.exec_c(command)
             result.as_memref().print_pyify()
+        elif command.startswith("verbose "):
+            fn_name = command.split(" ")[1]
+            formatters = command.split(" ")[2:]
+            interpreter.verbose_fns[fn_name] = formatters
+        elif command == "c":
+            break
         elif command == "probe":
             probe = module_data["driver_struct"].field("probe").get_value().cval()
             pc = interpreter.trace.opaque()
@@ -180,12 +187,6 @@ def REPL(interpreter):
                 except StopIteration: break
                 if result and result[0] == "return": break
             interpreter.trace.pop_scope()
-        elif command.startswith("verbose "):
-            fn_name = command.split(" ")[1]
-            formatters = command.split(" ")[2:]
-            interpreter.verbose_fns[fn_name] = formatters
-        elif command == "c":
-            break
         else:
             print(f"ssi > Unknown command '{command}'")
 REPL(interpreter)
