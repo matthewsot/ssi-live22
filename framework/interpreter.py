@@ -1,3 +1,9 @@
+"""Interpreter for C code
+
+Essentially, takes paths through parse trees produced by miniparse.py, desugars
+them with fancy_rewrite in lex.py, and then executes them via a mini IR
+understood by trace.py.
+"""
 import framework.lex as lex
 from framework.miniparse import *
 import sys
@@ -5,7 +11,9 @@ from framework.trace import *
 from framework.peg import parse_expr_str
 
 class Interpreter:
+    """Main interpreter class"""
     def __init__(self, file_name):
+        """Initialize a new interpreter from a source file"""
         self.file_name = file_name
         self.lexing = lex.lex_c(lex.path_to_string(file_name))
         self.trace = Trace()
@@ -15,12 +23,19 @@ class Interpreter:
         self.break_lines = dict()
 
     def set_to_line(self, line):
+        """Set the execution head to a given line number"""
         self.curr_lexeme = self.lexing.after_line_number(line)[0]
 
     def register_fn(self, name, handler):
+        """Register a Python handler for a source-level function"""
         self.fn_handlers[name] = handler
 
     def step(self):
+        """Interpret for a single step from self.curr_lexeme
+
+        If a return ... statement is reached, will return ["return",
+        return_value].
+        """
         if self.curr_lexeme is None: raise StopIteration
         if self.curr_lexeme.line_number in self.break_lines:
             self.break_lines[self.curr_lexeme.line_number](self)
@@ -33,6 +48,10 @@ class Interpreter:
         return self.interpret(tree)
 
     def exec_c(self, string, *args):
+        """Executes C code directly
+
+        TODO: Should this always be wrapped in a freeze_explanations()?
+        """
         arg_names = self.trace.gen_labels(len(args))
         for i, label in enumerate(arg_names):
             string = string.replace(f"{{{i}}}", f" {label} ")
@@ -43,7 +62,10 @@ class Interpreter:
                 f"void ___ssi_code() {{{{ return {string}; }}}}")
         self.curr_lexeme = next(l for l in new_lexemes if l.string == "return")
 
-        self.trace.push_scope(arg_names, [a if isinstance(a, Value) else Value(a, True, self.trace) for a in args])
+        self.trace.push_scope(arg_names,
+                              [a if isinstance(a, Value)
+                               else Value(a, True, self.trace)
+                               for a in args])
         while True:
             try:
                 result = self.step()
@@ -54,12 +76,27 @@ class Interpreter:
         self.trace.pop_scope()
         return result[1]
 
-    def replace_stmts(self, lexemes, replace_stmt, skip_over, replace_with_str):
+    def replace_stmts(self, lexemes, replace_stmt, skip_over,
+                      replace_with_str):
+        """Look for a type of statement and rewrite matches
+
+        Mostly used to rewrite break; statements inside of loops to the correct
+        gotos.
+        """
         replace_me = find_stmts(lexemes, (replace_stmt,), skip_over)
         for tree in replace_me:
             self.lexing.rewrite([relex(tree)[0]], replace_with_str)
 
     def interpret(self, tree):
+        """Main interpreter method
+
+        Goal is to interpret a single statement, then set curr_lexeme to
+        wherever we should keep interpreting from next. This will be called
+        (via Interpreter.step) in a loop by the SSI.
+
+        Return value can be None (default) or ["retrun", return_value] if it's
+        a return statement.
+        """
         if tree[0] in ("Function",):
             fn_name = relex(tree[:-2])[-1].string
             memloc = self.trace.local(fn_name)
@@ -207,11 +244,14 @@ class Interpreter:
             print(tree)
             raise NotImplementedError
 
-    def interpret_expr(self, tree):
-        with self.trace.explain(relex(tree)):
-            return self.interpret_expr_(tree)
-
     def emit(self, pattern, *args):
+        """Wrapper around Trace.emit
+
+        The idea here is that an expression foo() + bar() can emit the IR code
+        (add [subtree foo()] [subtree bar()]), and this method will recursively
+        call interpret_expr on the arguments [subtree foo()], etc., and produce
+        the correct IR that Trace.emit can read.
+        """
         expr = parse_expr_str(pattern, True)
         def visit(n):
             if not isinstance(n, list): return
@@ -225,11 +265,13 @@ class Interpreter:
         visit(expr)
         return self.trace.emit(expr)
 
+    def interpret_expr(self, tree):
+        """Wrapper to interpret an expression"""
+        with self.trace.explain(relex(tree)):
+            return self.interpret_expr_(tree)
+
     def interpret_expr_(self, tree):
-        """Always returns a register ID. Operands take register values
-        directly, operate on them, and store the result in an implicit last
-        register.
-        """
+        """Interpreter for expressions"""
         # print("EXPR TREE:", tree)
         if tree[0] == "Member":
             return self.emit("(field e{0} (imm {1}))",
@@ -387,15 +429,33 @@ class Interpreter:
         raise NotImplementedError
 
     def returnify_fn(self, start_lexeme):
+        """Takes a function and appends a "return;" statement to its body"""
         subtree, _ = PEG().parse("(balanced { })", start_lexeme.suffix(including_self=True))
         assert subtree
         if subtree[-3].string != "return":
             self.lexing.prepend(subtree[-1], "return ;")
 
     def default_fn_handler(self, tree, fn_lexemes, *args):
-        # self.trace.pprint()
+        """Handles a function call"""
+        if relex(tree)[0].string in self.verbose_fns:
+            # If marked verbose, print the arguments
+            line_number = relex(tree)[0].line_number
+            formats = self.verbose_fns[relex(tree)[0].string]
+            try:
+                print(f"Line {line_number}:",
+                        self.lexing.to_string(relex(tree)), "=>",
+                        ", ".join([f'{self.trace.emit(("*", a)).cval():{fmt}}'
+                                   for a, fmt in zip(args, formats)]))
+            except TypeError:
+                for a in args:
+                    inner_val = self.trace.emit(("*", a))
+                    if isinstance(inner_val.cval(), list):
+                        print(f"Line {line_number}: Could not verbose because missing", a.opaque_reason())
+        # Try to find a definition of the function
         start_lexeme, param_names = find_fn(fn_lexemes[0])
         if start_lexeme is not False:
+            # Found one, make sure it ends in a return statement and start
+            # running it!
             self.returnify_fn(start_lexeme)
             old_curr_lexeme = self.curr_lexeme
             # (1) Copy all of the args
@@ -411,18 +471,5 @@ class Interpreter:
                 # TODO: void, or implicit-return functions? Maybe insert an
                 # explicit return statement at the end.
             return self.trace.temp(["fneval", relex(tree)])
-        elif relex(tree)[0].string in self.verbose_fns:
-            line_number = relex(tree)[0].line_number
-            formats = self.verbose_fns[relex(tree)[0].string]
-            try:
-                print(f"Line {line_number}:",
-                        self.lexing.to_string(relex(tree)), "=>",
-                        ", ".join([f'{self.trace.emit(("*", a)).cval():{fmt}}'
-                                   for a, fmt in zip(args, formats)]))
-            except TypeError:
-                for a in args:
-                    inner_val = self.trace.emit(("*", a))
-                    if isinstance(inner_val.cval(), list):
-                        print(f"Line {line_number}: Could not verbose because missing", a.opaque_reason())
-        # return self.emit("(str (imm {0}))", ("fneval", relex(tree)))
+        # Otherwise, just assume it's opaque
         return self.trace.opaque()
