@@ -1,16 +1,22 @@
+"""Basic SSI for the pinctrl driver
+"""
 from framework.interpreter import *
 
+# Initialize the interpreter
 interpreter = Interpreter("pinctrl-bcm2835.c")
 true = interpreter.trace.local("true")
 true.as_memref().set_value(Value(1, True, interpreter.trace))
 
-# Execute any MODULE_* lines, saving data about the module.
+# The next step is to "run" all of the global code, like static global
+# variables, the MODULE_* lines at the end of the code, etc.
+# We'll add some helper methods here overriding the MODULE_* macros to catch
+# metadata about the driver an dprint it back to the user.
 module_data = dict({"authors": [], "description": None, "license": None, "driver_struct": None})
 def register_author(name_reg):
-    module_data["authors"].append(name_reg.value.value.value)
+    module_data["authors"].append(name_reg.value.value.cval())
 interpreter.register_fn("MODULE_AUTHOR", register_author)
 def register_description(descr_reg):
-    module_data["description"] = descr_reg.value.value.value
+    module_data["description"] = descr_reg.value.value.cval()
 interpreter.register_fn("MODULE_DESCRIPTION", register_description)
 def register_license(license_reg):
     module_data["license"] = license_reg.value.value.cval()
@@ -19,25 +25,27 @@ def register_driver_struct(struct_reg):
     module_data["driver_struct"] = struct_reg.cval()
 interpreter.register_fn("module_platform_driver", register_driver_struct)
 
-for _ in range(1000):
+# Run the global code
+while True:
     try:                    interpreter.step()
     except StopIteration:   break
 
-# OR, we just run everything starting from the zero and tell it to skip things
-# it doesn't understand.
-# interpreter.run_matching("(seq (/ (str MODULE_AUTHOR) (str MODULE_DESCRIPTION) (str MODULE_LICENSE) (str module_platform_driver)) (skipto (str ;)))")
-
+# Print metadata about the driver
 print("Loaded driver:")
 print("\tDescription:", module_data["description"])
 print("\tAuthor(s):", ", ".join(module_data["authors"]))
 print("\tLicense:", module_data["license"])
-# print("\tDriver Struct:", module_data["driver_struct"])
-probe = module_data["driver_struct"].field("probe").get_value().cval()
-# print("\tProbe:", probe)
 
+# This one driver seems to match against a variety of different devices. We can
+# find the list of supported device_ids on driver_struct.driver.of_match_table,
+# where driver_struct is the struct passed to the module_platform_driver
+# earlier during the "global execution" phase:
 of_match_table = interpreter.exec_c("{0}.driver.of_match_table[0]",
                                     module_data["driver_struct"]).cval().parent
 
+# Let's give the user a choice between the three different drivers in the
+# of_match_table. Each entry is a pair of "compatible" (the device ID) and
+# "data" (the corresponding device metadata to use).
 print("Choose device:")
 datas = []
 for i in range(len(of_match_table.children) - 1):
@@ -48,55 +56,88 @@ for i in range(len(of_match_table.children) - 1):
                               module_data["driver_struct"]).cval().get_value().cval()
     datas.append((compatible, data))
 data = datas[int(input("Choice: "))]
+# data is now a tuple of (device_id_string, bcm_plat_data) to use for this chip
 
-def kzalloc(*args):
-    return interpreter.emit("(str (str (opaque)))")
-interpreter.register_fn("devm_kzalloc", kzalloc)
-interpreter.register_fn("devm_kcalloc", kzalloc)
+######### Now we model the module-system interface. ########
 
+# Assume we're "compatible" with a device string iff this is the device string
+# we chose.
 def of_device_is_compatible(np, string):
     string = string.cval().get_value().cval()
     return interpreter.emit("(str (imm {0}))", string == data[0])
 interpreter.register_fn("of_device_is_compatible", of_device_is_compatible)
 
+# Helper method to find a device MMIO address in a DTSI file.
+def dtsi_find(dtsi_file, device_string):
+    from framework.lex import path_to_string
+    dtsi = path_to_string(dtsi_file)
+    try:
+        idx = dtsi.index(f'compatible = "{device_string}";')
+    except ValueError:
+        print(f"SSI: Could not find {device_string} in the DTSI file {dtsi_file}!")
+        print("SSI: Defaulting to address zero...")
+        return "0"
+    return dtsi[idx:].split(";")[1].split("<")[1].split(" ")[0]
+
+# Requesting a resource should look up the corresponding MMIO address in the
+# DTSI file, then assign the out parameter ptr_to_iomem to that address. NOTE:
+# This driver never treats it as a pointer, only ever calling writel/readl, so
+# we can just return it as an int.
 def of_address_to_resource(np, which_resource, ptr_to_iomem):
     assert which_resource.cval().get_value().cval() == 0
-    from framework.lex import path_to_string
-    dtsi = path_to_string("bcm283x.dtsi")
-    idx = dtsi.index(f'compatible = "{data[0]}";')
-    reg = dtsi[idx:].split(";")[1].split("<")[1].split(" ")[0]
-    interpreter.exec_c(f"*{{0}} = {reg}", ptr_to_iomem.cval())
+    addr = dtsi_find("bcm283x.dtsi", data[0])
+    interpreter.exec_c(f"*{{0}} = {addr}", ptr_to_iomem.cval())
     return interpreter.emit("(str (imm {0}))", 0)
 interpreter.register_fn("of_address_to_resource", of_address_to_resource)
 
-def is_err(*args):
-    return interpreter.emit("(str (imm {0}))", 0)
-interpreter.register_fn("IS_ERR", is_err)
-interpreter.register_fn("gpiochip_add_data", is_err)
-
+# I think ioremap_resource is supposed to map the physical address into a
+# virtual address for use. We don't really care for this module, so we'll just
+# use the physical address directly.
 def devm_ioremap_resource(dev, ptr_to_iomem):
     return interpreter.exec_c(f"*{{0}}", ptr_to_iomem.cval())
 interpreter.register_fn("devm_ioremap_resource", devm_ioremap_resource)
 
-def of_match_node(*args):
-    return interpreter.emit("(str (str (opaque)))")
-interpreter.register_fn("of_match_node", of_match_node)
+# I think this is a macro defined somewhere else, this seems to be a reasonable
+# interpretation of what it does...
+def BIT(val):
+    return interpreter.exec_c("(1 << ({0}))", val)
+interpreter.register_fn("BIT", BIT)
 
+# Stateful driver information is shared using a struct bcm2835_pinctrl
+# structure that the kernel records as the driver data. It is originall
+# allocated in the probe, then latter methods can access it by calling
+# gpiochip_get_data. We model this by storing a global copy of pc at the SSI
+# level, then whenever the user runs "probe" in the REPL we build a fresh pc
+# and use it everywhere until "probe" is run again (resetting the state).
 pc = None
 def gpiochip_get_data(*args):
     return pc
 interpreter.register_fn("gpiochip_get_data", gpiochip_get_data)
 
-def readl(*args):
+# The current interpreter does no serious path exploration; if it branches on
+# an opaque value, it always takes the positive branch. This is sort of
+# annoying when there are lots of if (foo_return_error(...)) return 0;
+# error-handling paths, so we stub a bunch of methods as doing nothing other
+# than return 0. Long-term, path exploration should remove the need to do this.
+def always_zero(*args):
     return interpreter.emit("(str (imm {0}))", 0)
-interpreter.register_fn("readl", readl)
+interpreter.register_fn("IS_ERR", always_zero)
+interpreter.register_fn("gpiochip_add_data", always_zero)
+interpreter.register_fn("readl", always_zero)
 
-def BIT(val):
-    return interpreter.exec_c("(1 << ({0}))", val)
-interpreter.register_fn("BIT", BIT)
+# Dereferencing an opaque value forces the interpreter to create a new memory
+# range, so allocations can just return new opaque pointers.
+def kzalloc(*args):
+    return interpreter.emit("(str (str (opaque)))")
+interpreter.register_fn("devm_kzalloc", kzalloc)
+# the model just has to be "good enough;" for the questions we care about,
+# calloc == malloc seems good enough for this code for now.
+interpreter.register_fn("devm_kcalloc", kzalloc)
+# This basically searches over a set of pointers, we don't care what it finds
+# as long as it finds "something," so we can approximate it with a malloc.
+interpreter.register_fn("of_match_node", kzalloc)
 
-interpreter.register_fn("explain", lambda x: interpreter.emit("(* {0})", x).explain())
-
+# Now we do the actual REPL
 def REPL(interpreter):
     global pc
     if interpreter.curr_lexeme:
@@ -113,11 +154,12 @@ def REPL(interpreter):
             result = interpreter.exec_c(command)
             result.as_memref().print_pyify()
         elif command == "probe":
+            probe = module_data["driver_struct"].field("probe").get_value().cval()
             pc = interpreter.trace.opaque()
             interpreter.trace.push_scope(["pc"], [pc])
             interpreter.returnify_fn(probe[1][0])
             interpreter.curr_lexeme = probe[1][0]
-            for _ in range(200):
+            while True:
                 try: result = interpreter.step()
                 except StopIteration: break
                 if result and result[0] == "return": break
@@ -133,7 +175,7 @@ def REPL(interpreter):
             assert param_names == ["data"]
             interpreter.trace.push_scope(param_names, [interpreter.trace.opaque()])
             interpreter.curr_lexeme = start_lex
-            for _ in range(200):
+            while True:
                 try: result = interpreter.step()
                 except StopIteration: break
                 if result and result[0] == "return": break
