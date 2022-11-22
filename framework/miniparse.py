@@ -186,8 +186,9 @@ def find_stmts(lexemes, stmt_types, skip_types):
 find_fn_memo = dict()
 def find_fn(name_lex):
     """Find a function declaration with the given name"""
-    if name_lex.string in find_fn_memo:
-        return find_fn_memo[name_lex.string]
+    key = (name_lex.lexing, name_lex.string)
+    if key in find_fn_memo:
+        return find_fn_memo[key]
     name_lexemes = [l for l in name_lex.lexing.lexemes
                     if l.string == name_lex.string]
     for lexeme in name_lexemes:
@@ -196,9 +197,9 @@ def find_fn(name_lex):
         if tree is not False and tree[1][0] == "Function":
             params = [x[-1].string for x in parse_csv(relex(tree[1][2][2])) if x]
             first_lex = relex(tree[1][3][1])[0]
-            find_fn_memo[name_lex.string] = first_lex, params
+            find_fn_memo[key] = first_lex, params
             return first_lex, params
-    find_fn_memo[name_lex.string] = False, False
+    find_fn_memo[key] = False, False
     return False, False
 
 def parse_macro(string):
