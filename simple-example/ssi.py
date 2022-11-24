@@ -16,9 +16,7 @@ def explain(value):
 interpreter.register_fn("ssi_explain", explain)
 
 # Pick up function declarations, globals, etc.
-for _ in range(1000):
-    try:                    interpreter.step()
-    except StopIteration:   break
+interpreter.globals_pass()
 
 # Then drop in to a REPL
 def REPL(interpreter):

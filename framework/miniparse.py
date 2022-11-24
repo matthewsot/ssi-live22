@@ -42,11 +42,12 @@ def parse_some_cf(lexemes):
     peg.rule("Preproc", "(:: preproc)")
 
     peg.rule("Quals", "(/ (:: ident) (str *)) (? (: Quals))")
-    peg.rule("Function", "(! (/ (str if) (str while) (str for))) (? (: Quals)) (balanced) (! (str ;)) (balanced { })")
+    # TODO: This is a bit too loose, may catch things like if (fo foo(...)) { ...
+    peg.rule("Function", "(! (/ (str if) (str while) (str for))) (: Quals) (balanced) (! (str ;)) (skipto (& (str {))) (balanced { }) (? (str ;))")
 
     peg.rule("Line", "(skipto (str ;))")
 
-    peg.rule("Statement", "(/ (: IfStmt) (: DoWhile) (: While) (: For) (: Switch) (: Case) (: Label) (: Goto) (: GotoITE) (: Break) (: Continue) (: Return) (: Function) (: Block) (: EndBlock) (: Preproc) (: Line))")
+    peg.rule("Statement", "(/ (: IfStmt) (: DoWhile) (: While) (: For) (: Switch) (: Case) (: Label) (: Goto) (: GotoITE) (: Break) (: Continue) (: Return) (: Block) (: EndBlock) (: Preproc) (: Function) (: Line))")
 
     return peg.parse("(: Statement)", lexemes)
 
@@ -110,6 +111,7 @@ def parse_some_expr(lexemes):
     try_parse("Parens", "(balanced)")
 
     try_parse("StructDecl", "(str struct) (? (:: ident)) (balanced { })")
+    try_parse("UnionDecl", "(str union) (? (:: ident)) (balanced { })")
     try_parse("EnumDecl", "(str enum) (? (:: ident)) (balanced { })")
 
     try_parse("InitList", "(balanced { })")
@@ -189,14 +191,21 @@ def find_fn(name_lex):
     key = (name_lex.lexing, name_lex.string)
     if key in find_fn_memo:
         return find_fn_memo[key]
-    name_lexemes = [l for l in name_lex.lexing.lexemes
-                    if l.string == name_lex.string]
+    depth = 0
+    name_lexemes = []
+    for l in name_lex.lexing.lexemes:
+        if depth == 0 and l.string == name_lex.string:
+            name_lexemes.append(l)
+        depth += (l.string == "{")
+        depth -= (l.string == "}")
     for lexeme in name_lexemes:
         suffix = lexeme.lexing.lexemes[lexeme.lexing.lexemes.index(lexeme):]
         tree, _ = parse_some_cf(suffix)
         if tree is not False and tree[1][0] == "Function":
-            params = [x[-1].string for x in parse_csv(relex(tree[1][2][2])) if x]
-            first_lex = relex(tree[1][3][1])[0]
+            params = next(c for c in tree[1] if c[0] == "bal" and relex(c)[0].string == "(")
+            params = [x[-1].string for x in parse_csv(relex(params)[1:-1]) if x]
+            body = next(c for c in tree[1] if c[0] == "bal" and relex(c)[0].string == "{")
+            first_lex = relex(body)[0]
             find_fn_memo[key] = first_lex, params
             return first_lex, params
     find_fn_memo[key] = False, False
@@ -211,7 +220,7 @@ def parse_macro(string):
     string = string[len("#define "):].strip()
     lexemes = lex_c(string).lexemes
     macro = dict({"name": lexemes[0].string, "args": None, "pattern": []})
-    if lexemes[1].string == "(":
+    if len(lexemes) > 1 and lexemes[1].string == "(":
         macro["args"] = []
         for i, key in enumerate(lexemes[2:]):
             if key.string == ")": break
@@ -222,6 +231,10 @@ def parse_macro(string):
     for lexeme in lexemes[1:]:
         if lexeme.string[0] == "#" and lexeme.string[1:] in args:
             macro["pattern"].append(("strify", args.index(lexeme.string[1:])))
+        elif lexeme.string[:2] == "##" and lexeme.string[2:] in args:
+            macro["pattern"].append(("pasteify", args.index(lexeme.string[2:])))
+        elif lexeme.string[:2] == "##":
+            macro["pattern"].append(("pasteify-str", lexeme.string[2:]))
         elif lexeme.string in args:
             macro["pattern"].append(args.index(lexeme.string))
         else:

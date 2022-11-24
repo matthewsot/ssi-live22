@@ -21,6 +21,16 @@ class Interpreter:
         self.verbose_fns = dict()
         self.curr_lexeme = self.lexing.lexemes[0]
         self.break_lines = dict()
+        self.is_globals_pass = False
+
+    def globals_pass(self):
+        """Runs a pass over globals in the file"""
+        self.curr_lexeme = self.lexing.lexemes[0]
+        self.is_globals_pass = True
+        while True:
+            try:                    self.step()
+            except StopIteration:   break
+        self.is_globals_pass = False
 
     def set_to_line(self, line):
         """Set the execution head to a given line number"""
@@ -98,9 +108,10 @@ class Interpreter:
         a return statement.
         """
         if tree[0] in ("Function",):
-            fn_name = relex(tree[:-2])[-1].string
-            memloc = self.trace.local(fn_name)
-            self.emit("(upd (imm {0}) {1})", ("fn", find_fn(relex(tree[:-2])[-1])), memloc)
+            bal_id = next(i for i, s in enumerate(tree) if s[0] == "bal")
+            fn_name_lex = relex(tree[bal_id - 1])[-1]
+            memloc = self.trace.local(fn_name_lex.string)
+            self.emit("(upd (imm {0}) {1})", ("fn", find_fn(fn_name_lex)), memloc)
             self.curr_lexeme = relex(tree)[-1].next_lexeme()
         elif tree[0] in ("Preproc",):
             macro = parse_macro(relex(tree)[0].string)
@@ -127,14 +138,21 @@ class Interpreter:
                         if depth < 0: break
                         if l.string == "," and depth == 0: args.append([])
                         else:               args[-1].append(l)
-                    def patternify(x):
+                    pattern = ""
+                    for x in macro["pattern"]:
                         if isinstance(x, str):
-                            return x.replace("{", "{{").replace("}", "}}")
+                            pattern += " " + x.replace("{", "{{").replace("}", "}}")
                         elif isinstance(x, int):
-                            return f"{{{x}}}"
-                        assert x[0] == "strify"
-                        return "\"" + " ".join([l.string for l in args[x[1]]]) + "\""
-                    pattern = " ".join(list(map(patternify, macro["pattern"])))
+                            pattern += " " + f"{{{x}}}"
+                        elif x[0] == "strify":
+                            assert x[0] == "strify"
+                            pattern += " " + "\"" + " ".join([l.string for l in args[x[1]]]) + "\""
+                        elif x[0] == "pasteify":
+                            pattern += " ".join([l.string for l in args[x[1]]])
+                        elif x[0] == "pasteify-str":
+                            pattern += x[1]
+                        else:
+                            raise NotImplementedError
                     self.lexing.rewrite(all_lexemes, pattern, dict({str(i): v for i, v in enumerate(args)}))
             self.curr_lexeme = relex(tree)[-1].next_lexeme()
             self.lexing.rewrite(relex(tree), "")
@@ -311,7 +329,10 @@ class Interpreter:
             if literals[0].label == "ident":
                 return self.trace.local(literals[0].string)
             if literals[0].label == "numlit":
-                return self.emit("(str (imm {0}))", eval(literals[0].string))
+                lit = literals[0].string
+                if all(c.isnumeric() for c in lit):
+                    return self.emit("(str (imm {0}))", int(lit))
+                return self.emit("(str (imm {0}))", eval(lit))
             raise NotImplementedError
         elif tree[0] == "pre_sizeof":
             _, new = self.lexing.fancy_rewrite(tree, self.trace, "sizeof ...", "sizeof({0})")
@@ -345,6 +366,8 @@ class Interpreter:
             if is_struct:
                 new, label = ["(", "{"], self.trace.gen_labels(1)[0]
                 for field in fields:
+                    while len(field) > 1 and field[0].string.startswith("#"):
+                        field = field[1:]
                     new += [label, field, ";"]
                 new += ["return", label, ";", "}", ")"]
                 new = self.lexing.rewrite(relex(tree), new)
@@ -367,11 +390,17 @@ class Interpreter:
                 # print(" ".join([l.string for l in new]))
                 return self.interpret_expr(parse_some_expr(new))
         elif tree[0] == "StructDecl":
+            # TODO: A bit sketchy with unnamed fields, but I don't think this
+            # is ever actually used anywhere so ...
             fields = []
             for field in parse_csv(relex(tree[-1])[1:-1], ";"):
                 if not field: continue
-                type_ = field[:-1]
-                name = field[-1].string
+                if field[-1].string == "}":
+                    type_ = field
+                    name = None
+                else:
+                    type_ = field[:-1]
+                    name = field[-1].string
                 if type_ and type_[0].string == "const":
                     type_ = type_[1:]
                 if any(l.string == "{" for l in type_):
@@ -382,6 +411,8 @@ class Interpreter:
             # print(fields)
             # TODO: Put it in memory, local ref to it
             return fields
+        elif tree[0] == "UnionDecl":
+            return None
         elif tree[0] == "EnumDecl":
             options = []
             count = 0
@@ -410,6 +441,9 @@ class Interpreter:
             fn = tree[1][1]
             args = parse_csv(relex(tree[1][2][1][2]))
             # print(args, self.trace.scopes)
+            if self.is_globals_pass and len(self.trace.scopes) == 1 and len(relex(fn)) > 1:
+                # TODO: better detection of declarations vs. calls
+                return None
             eval_args = [
                 self.interpret_expr(parse_some_expr(relex(arg)))
                 for arg in args

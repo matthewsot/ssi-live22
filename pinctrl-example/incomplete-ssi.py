@@ -19,13 +19,8 @@ def register_driver_struct(struct_reg):
     module_data["driver_struct"] = struct_reg.cval()
 interpreter.register_fn("module_platform_driver", register_driver_struct)
 
-for _ in range(1000):
-    try:                    interpreter.step()
-    except StopIteration:   break
-
-# OR, we just run everything starting from the zero and tell it to skip things
-# it doesn't understand.
-# interpreter.run_matching("(seq (/ (str MODULE_AUTHOR) (str MODULE_DESCRIPTION) (str MODULE_LICENSE) (str module_platform_driver)) (skipto (str ;)))")
+# Run the global code
+interpreter.globals_pass()
 
 print("Loaded driver:")
 print("\tDescription:", module_data["description"])

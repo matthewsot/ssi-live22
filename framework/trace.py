@@ -288,9 +288,9 @@ class Trace:
             _, src1, src2 = expr
             return self.operate(lambda x, y: eval(f"x {op} y"),
                                 [self.emit(src1), self.emit(src2)])
-        elif op in "-":
+        elif op in ("-", "~"):
             _, src1 = expr
-            return self.operate(lambda x: eval(f"-{x}"), [self.emit(src1)])
+            return self.operate(lambda x: eval(f"{op}{x}"), [self.emit(src1)])
         elif op == "assert":
             _, claim = expr
             # TODO: do something with this. Assertions are not assertions at

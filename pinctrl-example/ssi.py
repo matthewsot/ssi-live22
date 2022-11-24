@@ -26,9 +26,7 @@ def register_driver_struct(struct_reg):
 interpreter.register_fn("module_platform_driver", register_driver_struct)
 
 # Run the global code
-while True:
-    try:                    interpreter.step()
-    except StopIteration:   break
+interpreter.globals_pass()
 
 # Print metadata about the driver
 print("Loaded driver:")
