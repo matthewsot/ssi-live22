@@ -185,7 +185,7 @@ balanced parentheses.
 ## Warning & Status of Implementation
 Please be warned that this is a prototype, incomplete, work-in-progress
 implementation of an SSI framework. Things that are guaranteed not to work
-correctly yet:
+correctly yet include:
 - "Reinterpret casts," e.g., casting an `int *` to a `char *` to inspect
   individual bytes of an int. Or, more broadly, anything that relies on values
   having actual bit widths.
@@ -196,6 +196,11 @@ correctly yet:
   `framework/trace.py:Trace.emit_`.
 - Support for symbolic values is rudimentary; it cannot tell that, e.g.,
   `(x+y)==(y+x)`.
+- Functions with no definition are assumed to not make any change to global
+  state.
+- Proper handling of scope: no distinction between declaration and reference,
+  no hard scope boundary between function calls, improper scope handling if you
+  jump into/out of scopes.
 
 On the positive side of things, the entire framework is self-contained and only
 about 1k lines of code, so it shouldn't be _terribly_ difficult to debug things
