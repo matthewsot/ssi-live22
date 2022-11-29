@@ -60,7 +60,10 @@ class Value:
 
     def explain(self, depth=0):
         """Prints a trace of modifications to this value"""
-        print("|   " * depth + "Value:", self.canonical.value)
+        if isinstance(self.canonical.value, list):
+            print("|   " * depth + "Value: [opaque expr]")
+        else:
+            print("|   " * depth + "Value:", self.canonical.value)
         depth += 1
         print("|   " * depth + "Explanation:",
                 " ".join([l.string for l in self.explanation[0]

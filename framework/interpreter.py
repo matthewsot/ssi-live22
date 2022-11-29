@@ -476,10 +476,16 @@ class Interpreter:
             line_number = relex(tree)[0].line_number
             formats = self.verbose_fns[relex(tree)[0].string]
             try:
+                formatted = []
+                for a, fmt in zip(args, formats):
+                    val = self.trace.emit(("*", a))
+                    if val.canonical.concrete:
+                        formatted.append(f"{val.cval():{fmt}}")
+                    else:
+                        formatted.append("[opaque value]")
                 print(f"Line {line_number}:",
                         self.lexing.to_string(relex(tree)), "=>",
-                        ", ".join([f'{self.trace.emit(("*", a)).cval():{fmt}}'
-                                   for a, fmt in zip(args, formats)]))
+                        ", ".join(formatted))
             except TypeError:
                 for a in args:
                     inner_val = self.trace.emit(("*", a))

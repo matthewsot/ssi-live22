@@ -32,7 +32,8 @@ def REPL(interpreter):
         elif command.startswith("xc "):
             command = command[len("xc "):]
             result = interpreter.exec_c(command)
-            result.as_memref().print_pyify()
+            if result:
+                result.as_memref().print_pyify()
         elif command.startswith("xl "):
             line_number = int(command[len("xl "):])
             interpreter.set_to_line(line_number)
