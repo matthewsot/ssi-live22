@@ -207,6 +207,30 @@ about 1k lines of code, so it shouldn't be _terribly_ difficult to debug things
 (will be working on comments soon ...). If you have a small example that fails
 I'm happy to take a look.
 
+## Learnings
+This is an early prototype to play with the idea and not intended to be a final
+version. Some particular takeaways on the internal implementation, which we are
+working to incorporate into future versions:
+
+- The parsing-on-demand is cool and works relatively well, but is also less
+  useful and more time-consuming than expected. Instead, a TreeSitter-like
+  "parsing with best-effort error recovery" is probably closer to the sweet
+  spot. But this may depend strongly on how many crazy macros are not missing
+  vs. just types.
+- While we originally planned to make a much more involved symbolic system
+  (constraint solving, etc.) it turned out that just tracking opaque vs.
+  concrete values through the program was good enough for a surprising number
+  of things. This realization left a lot of dead code, e.g., Values are
+  represented as disjoint sets out of anticipation of needing to propagate
+  equality constraints, etc., but we never found that too useful.
+- Path scheduling is important and not something directly addressed yet. It
+  would be nice to allow the user to specify what line they want to reach, and
+  then fuzz values of opaques until it executes that line.
+- We organized it into multiple layers of lowering, ending in a mini
+  S-expression IR. This final stage of the IR is nice because it lets us trace
+  where a particular program value came from in a very consistent way, but also
+  not great because it forces mocks to be written against this IR.
+
 ## License
 AGPLv3, see `LICENSE`. The example code demonstrated in `pinctrl-example` is
 available under the GPLv2 license.
