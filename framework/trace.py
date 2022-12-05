@@ -53,6 +53,11 @@ class Value:
         assert not (isinstance(self.value, list) and self.concrete
                     and self.value[0] == "opaque")
 
+    def get_value(self, n_deref=1):
+        if n_deref == 0:
+            return self.cval()
+        return self.cval().get_value().get_value(n_deref - 1)
+
     def cval(self):
         """Returns the value of the canonical element in the equivalence class
         """

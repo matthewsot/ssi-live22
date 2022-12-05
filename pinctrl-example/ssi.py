@@ -13,13 +13,13 @@ true.as_memref().set_value(Value(1, True, interpreter.trace))
 # metadata about the driver an dprint it back to the user.
 module_data = dict({"authors": [], "description": None, "license": None, "driver_struct": None})
 def register_author(name_reg):
-    module_data["authors"].append(name_reg.value.value.cval())
+    module_data["authors"].append(name_reg.get_value())
 interpreter.register_fn("MODULE_AUTHOR", register_author)
 def register_description(descr_reg):
-    module_data["description"] = descr_reg.value.value.cval()
+    module_data["description"] = descr_reg.get_value()
 interpreter.register_fn("MODULE_DESCRIPTION", register_description)
 def register_license(license_reg):
-    module_data["license"] = license_reg.value.value.cval()
+    module_data["license"] = license_reg.get_value()
 interpreter.register_fn("MODULE_LICENSE", register_license)
 def register_driver_struct(struct_reg):
     module_data["driver_struct"] = struct_reg.cval()
@@ -48,10 +48,10 @@ print("Choose device:")
 datas = []
 for i in range(len(of_match_table.children) - 1):
     compatible = interpreter.exec_c(f"{{0}}.driver.of_match_table[{i}].compatible",
-                                    module_data["driver_struct"]).cval().get_value().cval()
+                                    module_data["driver_struct"]).get_value()
     print(i, ":", compatible)
     data = interpreter.exec_c(f"{{0}}.driver.of_match_table[{i}].data",
-                              module_data["driver_struct"]).cval().get_value().cval()
+                              module_data["driver_struct"]).get_value()
     datas.append((compatible, data))
 data = datas[int(input("Choice: "))]
 # data is now a tuple of (device_id_string, bcm_plat_data) to use for this chip
@@ -61,7 +61,7 @@ data = datas[int(input("Choice: "))]
 # Assume we're "compatible" with a device string iff this is the device string
 # we chose.
 def of_device_is_compatible(np, string):
-    string = string.cval().get_value().cval()
+    string = string.get_value()
     return interpreter.emit("(str (imm {0}))", string == data[0])
 interpreter.register_fn("of_device_is_compatible", of_device_is_compatible)
 
@@ -82,7 +82,7 @@ def dtsi_find(dtsi_file, device_string):
 # This driver never treats it as a pointer, only ever calling writel/readl, so
 # we can just return it as an int.
 def of_address_to_resource(np, which_resource, ptr_to_iomem):
-    assert which_resource.cval().get_value().cval() == 0
+    assert which_resource.get_value() == 0
     addr = dtsi_find("bcm283x.dtsi", data[0])
     interpreter.exec_c(f"*{{0}} = {addr}", ptr_to_iomem.cval())
     return interpreter.emit("(str (imm {0}))", 0)
@@ -175,7 +175,7 @@ def REPL(interpreter):
                 return interpreter.exec_c(f"{which_one}")
             interpreter.register_fn("irqd_to_hwirq", irqd_to_hwirq)
             fn = interpreter.exec_c("{0}->gpio_chip.irq.chip->irq_enable", pc.cval())
-            _, (start_lex, param_names) = fn.cval().get_value().cval()
+            _, (start_lex, param_names) = fn.get_value()
             interpreter.returnify_fn(start_lex)
             assert param_names == ["data"]
             interpreter.trace.push_scope(param_names, [interpreter.trace.opaque()])
